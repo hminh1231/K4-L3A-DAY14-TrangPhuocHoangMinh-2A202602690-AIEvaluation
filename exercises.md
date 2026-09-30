@@ -146,13 +146,38 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | Avg ≥ 0.7 trên toàn golden set; **và** không case policy/tiền/an toàn/bảo mật nào < 0.6 | Metric quan trọng nhất vì hallucination (bịa thời hạn đổi trả, mức giảm giá, hứa hoàn tiền) gây rủi ro pháp lý và mất niềm tin. Ngưỡng 0.7 theo bài giảng ("faithfulness < 0.7 → không được deploy"). Thêm điều kiện per-case vì một câu policy bịa đặt đã đủ gây hại dù average vẫn đẹp; nhất quán với 1.1 (câu policy < 0.6 thì block). |
+| Answer Relevance | Avg ≥ 0.6 | Answer lạc đề làm khách không nhận được thông tin, nhưng ít nguy hiểm hơn bịa đặt. Không đặt quá cao vì câu adversarial/mơ hồ có hành vi đúng là từ chối hoặc hỏi lại nên relevance tự nhiên thấp; ngưỡng 0.6 là ranh giới "needs work" → "significant issues". |
+| Completeness | Avg ≥ 0.6 | Thiếu điều kiện/ngoại lệ (phí restocking, activation lock, cảnh báo pin phồng) làm khách thao tác sai. Tuy vậy metric token-overlap phạt cả paraphrase đúng ý, nên ngưỡng không thể quá chặt; các case completeness thấp được đưa sang human review thay vì chỉ dựa vào điểm. |
+
+**Quy tắc bổ sung cho quality gate:**
+
+- **Regression gate:** block nếu bất kỳ metric trung bình nào giảm > 0.05 so với
+  baseline của version đang chạy production (dùng `run_regression()`), kể cả khi
+  vẫn trên ngưỡng tuyệt đối — tránh chất lượng giảm dần qua nhiều lần release.
+- **Pass rate:** ≥ 80% case pass theo rule per-case (cả ba score ≥ 0.5); 100% case
+  adversarial phải từ chối đúng và không lộ system prompt/thông tin khách hàng.
+- **Retrieval metrics** (Context Recall/Precision) không block deploy mà dùng
+  làm cảnh báo: nếu giảm mạnh thì báo lỗi để team kiểm tra retriever/chunking.
+- Ngưỡng này là điểm khởi đầu; sau khi calibrate judge với human labels
+  (Exercise 1.2 Câu 3) sẽ điều chỉnh lại cho khớp với nhận định "đạt/không đạt"
+  của người chấm.
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
 > *Câu trả lời:*
+>
+> | Loại | Khi nào dùng | Ví dụ với OrbitTech |
+> |---|---|---|
+> | **Offline evaluation** | Trước khi deploy: mỗi lần đổi prompt, model, retriever, chunking hoặc cập nhật tài liệu policy. Chạy tự động trong CI trên golden dataset cố định, nhanh, rẻ, lặp lại được, dùng làm quality gate và regression test. | Mỗi pull request chạy 20 QA golden (+ bộ regression lớn hơn), tính Faithfulness/Relevance/Completeness và Context Recall/Precision; không đạt ngưỡng Câu 1 thì block merge. |
+> | **Online evaluation** | Sau khi deploy, trên traffic thật: phát hiện những gì golden set không bao phủ (câu hỏi mới, phân phối thay đổi, policy mới, drift). Dùng A/B test hoặc canary khi release version mới, theo dõi liên tục bằng dashboard + alert. | Sample 5–10% hội thoại thật để chấm tự động bằng LLM judge; theo dõi thumbs up/down, tỉ lệ chuyển sang nhân viên, tỉ lệ khách hỏi lại, CSAT; canary 10% traffic cho prompt mới trước khi rollout toàn bộ. |
+> | **Human review** | Khi cần ground truth hoặc rủi ro cao: (1) xây và cập nhật golden dataset; (2) calibrate LLM judge; (3) case metric không chắc chắn (điểm sát ngưỡng, judge và metric mâu thuẫn, paraphrase bị token-overlap phạt oan); (4) chủ đề nhạy cảm — tiền, hoàn tiền ngoại lệ, an toàn pin, bảo mật tài khoản; (5) trước release lớn hoặc khi policy thay đổi. | Nhân viên support review hàng tuần các hội thoại bị flag (điểm thấp, khách phàn nàn, có từ khóa "pin phồng", "bị hack"); lỗi tìm được được thêm ngược vào golden dataset. |
+>
+> **Kết hợp thành vòng lặp:** offline eval chặn lỗi đã biết trước khi deploy →
+> online eval phát hiện lỗi mới trên traffic thật → human review xác nhận lỗi,
+> gán nhãn và đưa case mới vào golden dataset → offline eval lần sau bao phủ
+> được lỗi đó. Tự động hóa lo phần số lượng lớn; con người lo phần rủi ro cao và
+> giữ cho thước đo tự động luôn đáng tin.
 
 ---
 
