@@ -456,19 +456,73 @@ verbosity bias và self-preference bằng cách nào?
 Chỉ làm sau khi hoàn thành 3.1–3.3. Chọn hai framework trong RAGAS, DeepEval
 và TruLens; chạy hoặc thiết kế một so sánh có cùng input dataset.
 
-| Tiêu chí | Framework 1: ____ | Framework 2: ____ |
+**Cách chạy:** script [framework_comparison.py](framework_comparison.py) (cài
+thêm bằng `pip install -r requirements-bonus.txt`) chấm cùng 20 records
+(`golden_dataset.json` + `artifacts/actual_answers.json`, dùng retrieved contexts
+thật), cùng judge `gpt-4o-mini`, cùng 4 metric: Faithfulness, Answer Relevancy,
+Context Recall, Context Precision. Pass rule giống nhau cho cả hai: Faithfulness
+và Relevancy ≥ 0.5. Kết quả lưu ở `artifacts/framework_comparison.json`.
+
+| Tiêu chí | Framework 1: RAGAS 0.4.3 | Framework 2: DeepEval 4.2.7 |
 |---|---|---|
-| Setup complexity | | |
-| Metrics available | | |
-| CI/CD integration | | |
-| Kết quả trên cùng dataset | | |
-| Insight rút ra | | |
+| Setup complexity | Trung bình–khó: phụ thuộc LangChain; bản mới nhất lỗi import (`langchain_community.chat_models.vertexai`), phải ghim `langchain-community<0.4`. Cần cả LLM và embedding model (Answer Relevancy dùng embedding). API đang chuyển từ `ragas.metrics` sang `ragas.metrics.collections` nên nhiều deprecation warning. | Dễ: `pip install deepeval`, tạo `LLMTestCase` rồi `metric.measure()`. Chỉ cần LLM, không cần embedding. Phải tắt telemetry (`DEEPEVAL_TELEMETRY_OPT_OUT`). |
+| Metrics available | Tập metric RAG chuẩn (faithfulness, response relevancy, context recall/precision/entity recall, noise sensitivity), factual correctness, semantic similarity, rubric-based, agent/tool-call metrics, và cả metric không dùng LLM (BLEU, ROUGE, exact match). | Metric RAG tương đương (faithfulness, answer relevancy, contextual recall/precision/relevancy), cộng thêm G-Eval/DAG (tự định nghĩa rubric), hallucination, bias, toxicity, PII leakage, role adherence, conversational và agent metrics. Mỗi metric trả về `reason` giải thích điểm. |
+| CI/CD integration | Không có test runner riêng; gọi `evaluate()` trong script rồi tự viết assert/threshold. Chạy batch async nên nhanh: **85 giây** cho 80 lượt chấm. | Tích hợp sẵn pytest (`deepeval test run`, `assert_test` với threshold theo metric) → dễ gắn vào quality gate. Nhưng chạy tuần tự (`async_mode=False`) mất **717 giây**, và có timeout tạm thời nên cần retry. |
+| Kết quả trên cùng dataset | Avg Faithfulness **0.725**, Relevancy **0.696**, Recall 0.863, Precision 0.908. Pass rate **80%** (fail: H01, H04, A01, A02). | Avg Faithfulness **0.876**, Relevancy **0.782**, Recall 0.951, Precision 0.872. Pass rate **85%** (fail: H01, A01, A03). |
+| Insight rút ra | Strict hơn ở Faithfulness/Relevancy. Relevancy = 0 cho mọi câu trả lời bị coi là "noncommittal" (A01, A02, H04) → phạt nặng lời từ chối đúng. | Dễ dãi hơn ở Faithfulness/Recall, nhưng Relevancy = 0 cho A03 (câu bác bỏ premise sai, trả lời đúng). Phần `reason` giúp debug nhanh hơn. |
+
+So với metric token-overlap trong `template.py` (pass rate 25%), cả hai
+framework LLM-based dễ dãi hơn nhiều (80–85%) vì chúng hiểu paraphrase: E02, E04,
+E05 bị template gắn `off_topic` nhưng được cả RAGAS và DeepEval cho Relevancy
+0.86–1.00.
 
 - Scores có nhất quán không?
 - Framework nào strict hơn và vì sao?
 - Hai framework có tìm ra cùng failure cases không?
 
 > *Phân tích:*
+>
+> **1. Tính nhất quán — thấp ở mức từng case.** Trung bình chênh nhau vừa phải,
+> nhưng thứ hạng từng case gần như không tương quan:
+>
+> | Metric | Mean abs diff | Spearman |
+> |---|---:|---:|
+> | Faithfulness | 0.226 | 0.255 |
+> | Relevancy | 0.240 | 0.065 |
+> | Context Recall | 0.141 | 0.062 |
+> | Context Precision | 0.109 | 0.351 |
+>
+> Ví dụ lệch lớn: H04 RAGAS cho Faithfulness 0.00 / Relevancy 0.00, DeepEval cho
+> 0.86 / 1.00; A03 RAGAS Relevancy 0.81, DeepEval 0.00. Cùng tên metric nhưng cách
+> tách claim và prompt judge khác nhau nên không thể so điểm tuyệt đối giữa hai
+> framework; chỉ nên so **cùng framework qua các version** (regression).
+>
+> **2. RAGAS strict hơn** ở Faithfulness (0.725 vs 0.876) và Relevancy (0.696 vs
+> 0.782). Lý do: RAGAS Faithfulness tách answer thành nhiều statement nhỏ và
+> kiểm tra từng cái với context, nên các câu suy luận thêm (vd H01 tự tính "until
+> September 10, 2026") bị tính là không được hỗ trợ → 0.20. RAGAS Response
+> Relevancy sinh câu hỏi ngược từ answer và **đặt 0 điểm nếu answer bị coi là
+> noncommittal**, nên lời từ chối (A01, A02) và câu "bạn có thể hỏi thêm…" (H04)
+> đều về 0. DeepEval chỉ strict hơn ở Context Precision (0.872 vs 0.908) và trong
+> case A03, nơi judge coi câu "No, you cannot…" không trả lời câu hỏi.
+>
+> **3. Failure cases chỉ trùng một phần.** Cả hai cùng fail **H01** (câu trả lời
+> bỏ qua OrbitPlus và có claim tự tính ngày) và **A01** (từ chối bị chấm
+> Relevancy = 0). Chỉ RAGAS fail A02, H04; chỉ DeepEval fail A03. Quan trọng hơn,
+> **cả hai đều cho pass H02** (RAGAS Faithfulness 0.50, DeepEval 0.60), trong
+> khi H02 trả lời sai hẳn (đơn 05/09/2026 bị xếp vào policy v1.0, 21 ngày thay vì
+> 30 ngày). Lý do: câu sai "v1.0 cho phép 21 ngày" vẫn *có trong context*, nên
+> faithfulness chỉ bị trừ một phần; lỗi nằm ở chỗ áp policy vào sai ngày, và
+> faithfulness/relevancy không kiểm tra điều đó.
+>
+> **Kết luận:** (a) 3/5 case bị gắn fail là câu adversarial có hành vi đúng →
+> với adversarial phải dùng metric hành vi riêng (vd DeepEval G-Eval "có từ chối
+> và chuyển hướng đúng không") thay vì Answer Relevancy; (b) cần thêm metric so
+> với reference như RAGAS `FactualCorrectness` hoặc G-Eval correctness để bắt
+> lỗi kiểu H02; (c) cho CI, DeepEval tiện hơn nhờ pytest và `reason`, còn RAGAS
+> nhanh hơn ~8 lần khi chấm batch lớn; (d) vì hai framework lệch nhau nhiều ở
+> từng case, chọn một framework làm quality gate và calibrate nó với human label
+> (Exercise 1.2), không trộn điểm của hai framework.
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus +5)
 
