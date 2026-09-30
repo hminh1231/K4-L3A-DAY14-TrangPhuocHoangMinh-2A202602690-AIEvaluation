@@ -55,14 +55,90 @@ Ba bias thường gặp:
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
 > *Câu trả lời:*
+>
+> **Giả thuyết:** judge chọn answer theo vị trí chứ không theo chất lượng.
+> Nếu không có bias, việc đổi chỗ hai answer không làm thay đổi answer thắng.
+>
+> **Dữ liệu:** lấy khoảng 50 câu hỏi OrbitTech (trộn easy/medium/hard/adversarial).
+> Với mỗi câu, có cặp answer (A, B) sinh từ hai version prompt/model khác nhau.
+> Thêm khoảng 10 cặp "control" mà hai answer gần như giống hệt nhau (chỉ đổi
+> vài từ) để biết tỉ lệ nền khi hai bên ngang nhau.
+>
+> **Conditions (giữ nguyên judge prompt, model, temperature = 0):**
+>
+> | Condition | Thứ tự trình bày |
+> |---|---|
+> | C1 — Original | Response 1 = A, Response 2 = B |
+> | C2 — Swapped | Response 1 = B, Response 2 = A |
+> | C3 — Identical (control) | Response 1 = A, Response 2 = A (cùng một answer) |
+>
+> **Đo lường:**
+> - *Consistency rate*: % cặp mà judge chọn cùng một answer (A hoặc B) ở cả C1
+>   và C2. Judge không bias → gần 100%.
+> - *First-position win rate*: % lần "Response 1" thắng, gộp C1 + C2. Không
+>   bias → khoảng 50%.
+> - Ở C3, judge phải cho hòa hoặc điểm bằng nhau; nếu vẫn thường chọn
+>   Response 1 thì đó là position bias rõ ràng.
+> - Với chấm điểm tuyệt đối (1–5), so sánh điểm của cùng một answer khi đặt ở
+>   vị trí 1 và vị trí 2 (paired difference).
+>
+> **Kết luận:** dùng binomial test / McNemar test cho first-position win rate so
+> với 50%. Ví dụ: first-position win rate > 60% hoặc consistency < 80% → kết
+> luận có position bias. Cách giảm: luôn chấm cả hai thứ tự và chỉ tính thắng
+> khi hai lần chấm đồng ý, không đồng ý thì tính là hòa.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
 > *Câu trả lời:*
+>
+> - **Chấm theo checklist ý bắt buộc, không chấm cảm tính "đầy đủ":** rubric
+>   liệt kê các ý bắt buộc cho từng câu (vd: "30 ngày", "phí restocking 10% nếu
+>   đã mở hộp", "gỡ activation lock"). Điểm Completeness = số ý đúng / số ý bắt
+>   buộc. Viết dài thêm mà không có ý mới thì không được thêm điểm.
+> - **Tách dimension:** chấm riêng Correctness, Completeness, Conciseness/Clarity.
+>   Answer dài lan man có thể đủ ý nhưng sẽ bị trừ ở Conciseness, nên độ dài
+>   không kéo điểm tổng lên.
+> - **Phạt rõ ràng nội dung thừa hoặc không có evidence:** mỗi claim không có
+>   trong context (vd: tự thêm chính sách bảo hành không tồn tại) bị trừ điểm
+>   Faithfulness, dù nghe có vẻ hữu ích. Câu dài có nhiều claim hơn nên cũng có
+>   nhiều chỗ để bị trừ hơn.
+> - **Ghi thẳng vào judge prompt:** "Không cho điểm cao hơn chỉ vì câu trả lời
+>   dài hơn; một câu ngắn đủ ý đạt điểm tối đa." Kèm ví dụ anchor: một answer
+>   ngắn 2 câu được 5 điểm và một answer dài 3 đoạn chỉ được 3 điểm vì thiếu
+>   điều kiện quan trọng.
+> - **Yêu cầu judge trích bằng chứng trước khi chấm:** judge phải chỉ ra câu
+>   nào trong answer đáp ứng từng tiêu chí rồi mới cho điểm, không được chấm
+>   tổng thể theo ấn tượng.
+> - **Kiểm tra lại bias:** tạo cặp answer cùng nội dung nhưng một bản được
+>   thêm câu "độn" (lời chào, lặp lại chính sách); nếu bản dài vẫn được điểm cao
+>   hơn thì phải sửa rubric. Có thể theo dõi thêm correlation giữa độ dài answer
+>   và điểm judge.
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
 > *Câu trả lời:*
+>
+> - **Judge cũng là một model có thể sai:** nếu chưa kiểm chứng thì không biết
+>   điểm judge có phản ánh chất lượng thật hay không. Human labels là ground
+>   truth để đo độ tin cậy của chính judge.
+> - **Phát hiện bias và lệch chuẩn:** so với người chấm để thấy judge có dễ
+>   dãi quá (leniency, điểm dồn > 0.8), khắt khe quá (severity, < 0.3), thiên vị
+>   vị trí, độ dài, hoặc ưu tiên output của chính model family đó.
+> - **Hiểu đúng yêu cầu domain:** judge có thể cho điểm cao một answer lịch sự,
+>   trôi chảy nhưng sai chính sách OrbitTech (sai số ngày đổi trả, hứa hoàn tiền
+>   không có trong policy) hoặc không nhận ra lỗi an toàn (pin phồng) và bảo mật
+>   (lộ thông tin tài khoản). Nhân viên support nắm policy mới bắt được những lỗi
+>   này.
+> - **Chọn threshold có ý nghĩa:** ngưỡng block release (vd: Faithfulness < 0.8)
+>   chỉ có giá trị khi điểm judge đã được đối chiếu với nhận định "đạt / không
+>   đạt" của người thật.
+> - **Cách làm:** lấy khoảng 50–100 case (có đủ adversarial và hard), cho 2 người
+>   chấm độc lập theo cùng rubric, đo inter-annotator agreement (Cohen's kappa)
+>   trước, sau đó đo agreement giữa judge và người (kappa, Spearman correlation).
+>   Chỉ dùng judge tự động khi agreement đạt mức chấp nhận được (vd: kappa ≥ 0.6);
+>   nếu không thì sửa rubric/prompt rồi lặp lại. Sau đó calibrate lại định kỳ
+>   hoặc mỗi khi đổi judge model, prompt hoặc policy, vì judge có thể drift theo
+>   thời gian.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
